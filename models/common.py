@@ -59,6 +59,8 @@ class Concat(nn.Module):
         self.d = dimension
 
     def forward(self, x):
+        # print(len(x), [t.shape for t in x])
+        # print(self.d)
         return torch.cat(x, self.d)
 
 
@@ -444,7 +446,7 @@ class ImplicitA(nn.Module):
     
 
 class ImplicitM(nn.Module):
-    def __init__(self, channel, mean=1., std=.02):
+    def __init__(self, channel, mean=0., std=.02):
         super(ImplicitM, self).__init__()
         self.channel = channel
         self.mean = mean

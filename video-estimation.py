@@ -1,3 +1,5 @@
+import threading
+
 import torch
 import cv2
 from torchvision import transforms
@@ -12,6 +14,7 @@ from utils.plots import output_to_keypoint, colors, plot_one_box_kpt
 # Configurations
 view_img = False
 save_demo_video = False
+select_skeletons = True
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 model = torch.load('yolov7-w6-pose.pt', map_location=device)['model']
@@ -21,9 +24,43 @@ if torch.cuda.is_available():
     model.half().to(device)
 
 
-def video_pose_estimation(data_dir, filename):
+def input_int(message):
+    try:
+        result = int(input(message))
+        return result
+    except ValueError:
+        print("Please enter an integer. Try again.")
+        return input_int(message)
+
+
+def show_skeleton(image, output_data, names):
+    im0 = image[0].permute(1, 2, 0) * 255  # Change format [b, c, h, w] to [h, w, c] for displaying the image.
+    im0 = im0.cpu().numpy().astype(np.uint8)
+
+    im0 = cv2.cvtColor(im0, cv2.COLOR_RGB2BGR)  # reshape image format to (BGR)
+    # gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
+
+    for i, pose in enumerate(output_data):  # detections per image
+        if len(output_data):  # check if no pose
+            for c in pose[:, 5].unique():  # Print results
+                n = (pose[:, 5] == c).sum()  # detections per class
+                print("No of Objects in Current Frame : {}".format(n))
+
+            for det_index, (*xyxy, conf, cls) in enumerate(
+                    reversed(pose[:, :6])):  # loop over poses for drawing on frame
+                c = int(cls)  # integer class
+                kpts = pose[det_index, 6:]
+                label = f'{names[c]} No.{det_index}-{conf:.2f}'
+                plot_one_box_kpt(xyxy, im0, label=label, color=colors(c, True),
+                                 line_thickness=3, kpt_label=True, kpts=kpts, steps=3,
+                                 orig_shape=im0.shape[:2])
+    return im0
+
+
+def video_pose_estimation(data_dir, filename, index):
     names = model.module.names if hasattr(model, 'module') else model.names  # get class names
     filepath = f"{data_dir}/{filename}"
+    print('filepath:', filepath)
     cap = cv2.VideoCapture(filepath)
 
     if not cap.isOpened():
@@ -44,6 +81,9 @@ def video_pose_estimation(data_dir, filename):
         print(out_filename, frame_width, frame_height)
 
     outputList = []
+    isFirst = True
+    image0 = None
+    output_data0 = None
 
     while cap.isOpened():
         ret, frame = cap.read()
@@ -67,7 +107,8 @@ def video_pose_estimation(data_dir, filename):
 
         with torch.no_grad():  # get predictions
             # print(image)
-            print('image.shape:', image.shape)
+            # print('image.shape:', image.shape)
+            print(frame_count, end=' ')
             output_data, _ = model(image)  # problem
 
         output_data = non_max_suppression_kpt(output_data,  # Apply non-max suppression
@@ -76,31 +117,16 @@ def video_pose_estimation(data_dir, filename):
                                             nc=model.yaml['nc'],  # Number of classes.
                                             nkpt=model.yaml['nkpt'],  # Number of keypoints.
                                             kpt_label=True)
+        if isFirst:
+            image0 = image
+            output_data0 = output_data
+            isFirst = False
 
         output = output_to_keypoint(output_data)
         outputList.append(output)
 
         if view_img or save_demo_video:
-            im0 = image[0].permute(1, 2, 0) * 255  # Change format [b, c, h, w] to [h, w, c] for displaying the image.
-            im0 = im0.cpu().numpy().astype(np.uint8)
-
-            im0 = cv2.cvtColor(im0, cv2.COLOR_RGB2BGR)  # reshape image format to (BGR)
-            gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
-
-            for i, pose in enumerate(output_data):  # detections per image
-                if len(output_data):  # check if no pose
-                    for c in pose[:, 5].unique():  # Print results
-                        n = (pose[:, 5] == c).sum()  # detections per class
-                        print("No of Objects in Current Frame : {}".format(n))
-
-                    for det_index, (*xyxy, conf, cls) in enumerate(
-                            reversed(pose[:, :6])):  # loop over poses for drawing on frame
-                        c = int(cls)  # integer class
-                        kpts = pose[det_index, 6:]
-                        label = f'{names[c]} {conf:.2f}'
-                        plot_one_box_kpt(xyxy, im0, label=label, color=colors(c, True),
-                                        line_thickness=3, kpt_label=True, kpts=kpts, steps=3,
-                                        orig_shape=im0.shape[:2])
+            im0 = show_skeleton(image, output_data, names)
 
         # Stream results
         if view_img:
@@ -120,7 +146,8 @@ def video_pose_estimation(data_dir, filename):
 
     # pose.close()
     cap.release()
-    out.release()
+    if save_demo_video:
+        out.release()
 
     human_count = max({output.shape[0] for output in outputList})
 
@@ -132,25 +159,97 @@ def video_pose_estimation(data_dir, filename):
         if output.shape[0]:
             data_shape = output[0].shape
             break
-    zero_data_shape = np.zeros(data_shape)
+    prev_data = np.zeros(data_shape)
 
     for frame_index in range(frame_count):
         for human_index in range(human_count):
             data = outputList[frame_index][human_index] \
-                if len(outputList[frame_index]) < human_index \
-                else zero_data_shape
+                if len(outputList[frame_index]) > human_index \
+                else prev_data
+            prev_data = data
             data = data[7:].T
             keypoints[human_index].append(np.array([data[::3], data[1::3]]).T)
             scores[human_index].append(data[2::3])
+
+    # copying the first frame which was recognized
+    for human_index in range(human_count):
+        for frame_index in range(frame_count):
+            if keypoints[human_index][frame_index].any():  # if the first frame which is not all zeros
+                keypoint_first = keypoints[human_index][frame_index]
+                score_first = scores[human_index][frame_index]
+                for new_frame_index in range(frame_index):
+                    keypoints[human_index][new_frame_index] = keypoint_first
+                    scores[human_index][new_frame_index] = score_first
+                break
+
+    if select_skeletons:
+        title = f"YOLOv7 Pose Estimation Demo: No. {index}"
+        im0 = show_skeleton(image0, output_data0, names)
+        im0 = cv2.resize(im0, (960, 540))
+        cv2.imshow(title, im0)
+
+        print("Enter Kicker Index")
+        key_input = ''
+        while True:
+            key = cv2.waitKey(0)
+            if key in range(ord('0'), ord('9')+1):
+                key_input += chr(key)
+                print(f"{title} - Kicker: {key_input}")
+            elif key in [10, 13]:  # Enter
+                if key_input:
+                    break
+                print("Please enter a number")
+            elif key == 8:  # Backspace
+                if key_input:
+                    key_input = key_input[:-1]
+                print(f"{title} - Kicker: {key_input}")
+            else:
+                print("Please enter a number")
+        kicker_index = int(key_input)
+        print("Kicker:", kicker_index)
+
+        print("Enter Goalkeeper Index")
+        key_input = ''
+        while True:
+            key = cv2.waitKey(0)
+            if key in range(ord('0'), ord('9')+1):
+                key_input += chr(key)
+                print(f"{title} - Kicker: {kicker_index} - Goalkeeper: {key_input}")
+            elif key in [10, 13]:  # Enter
+                if key_input:
+                    break
+                print("Please enter a number")
+            elif key == 8:  # Backspace
+                if key_input:
+                    key_input = key_input[:-1]
+                print(f"{title} - Kicker: {kicker_index} - Goalkeeper: {key_input}")
+            else:
+                print("Please enter a number")
+        goalkeeper_index = int(key_input)
+        print("Goalkeeper:", goalkeeper_index)
+
+        keypoints = [keypoints[kicker_index], keypoints[goalkeeper_index]]
+        scores = [scores[kicker_index], scores[goalkeeper_index]]
 
     keypoints, scores = np.array(keypoints), np.array(scores)
     return filepath, keypoints, scores
 
 
-data_dir = 'data_new'
-data_list = []
-for filename in os.listdir(data_dir):
-    data_list.append(video_pose_estimation(data_dir, filename))
+pickle_path = "../result.pickle"
+data_dir = 'data_test'
 
-with open("result.pickle", "wb") as f:
+try:
+    with open(pickle_path, "rb") as f:
+        data_list = pickle.load(f)
+except FileNotFoundError:
+    data_list = []
+
+for index, filename in enumerate(os.listdir(data_dir)):
+    data_list.append(video_pose_estimation(data_dir, filename, index))
+    cv2.destroyAllWindows()
+
+with open(pickle_path, "wb") as f:
     pickle.dump(data_list, f, protocol=pickle.HIGHEST_PROTOCOL)
+print("Saving Complete")
+
+#%%
