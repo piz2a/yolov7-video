@@ -10,9 +10,10 @@ import pickle
 from utils.plots import output_to_keypoint, colors, plot_one_box_kpt
 
 # Configurations
-view_img = True
+view_img = False
 save_demo_video = False
-select_skeletons = False
+# select_skeletons = False
+coco_center = 1
 pickle_path = "../result.pickle"
 data_dir = 'data_test'
 
@@ -50,7 +51,7 @@ def show_skeleton(image, output_data, names):
 
             for det_index, (*xyxy, conf, cls) in enumerate(
                     reversed(pose[:, :6])):  # loop over poses for drawing on frame
-                print(f"- {det_index} / {n}")
+                # print(f"- {det_index} / {n}")
                 c = int(cls)  # integer class
                 kpts = pose[det_index, 6:]
                 label = f'{names[c]} No.{det_index}-{conf:.2f}'
@@ -61,7 +62,34 @@ def show_skeleton(image, output_data, names):
     return im0
 
 
-def video_pose_estimation(data_dir, filename, index):
+def choose_skeleton_using_keys(log_text):
+    key_input = ''
+    while True:
+        key = cv2.waitKey(0)
+        if key in range(ord('0'), ord('9')+1):
+            key_input += chr(key)
+            print(f"{log_text}{key_input}")
+        elif key in [10, 13]:  # Enter
+            if key_input:
+                break
+            print("Please enter a number")
+        elif key == 8:  # Backspace
+            if key_input:
+                key_input = key_input[:-1]
+            print(f"{log_text}{key_input}")
+        elif key == ord('x'):
+            print("Press 'x' again to skip this video.")
+            key2 = cv2.waitKey(0)
+            if key2 == ord('x'):
+                print("Giving up this data")
+                return None
+            print('Video skipping canceled.')
+        else:
+            print("Please enter a number")
+    return int(key_input)
+
+
+def video_pose_estimation(data_dir, filename, index, video_count):
     names = model.module.names if hasattr(model, 'module') else model.names  # get class names
     filepath = f"{data_dir}/{filename}"
     print('filepath:', filepath)
@@ -90,6 +118,7 @@ def video_pose_estimation(data_dir, filename, index):
     output_data0 = None
 
     while cap.isOpened():
+        # print('test1')
         ret, frame = cap.read()
         if not ret:
             break
@@ -99,9 +128,10 @@ def video_pose_estimation(data_dir, filename, index):
         image = cv2.cvtColor(orig_image, cv2.COLOR_BGR2RGB)  # convert frame to RGB
         image = letterbox(image, frame_width, stride=64, auto=True)[0]
         image = cv2.resize(image, (1920, 1088))
-        image_ = image.copy()
+        # image_ = image.copy()
         image = transforms.ToTensor()(image)
         image = torch.tensor(np.array([image.numpy()]))
+        # print('test2')
 
         # image = image.to(device)  #convert image data to device
         # image = image.float() #convert image to float precision (cpu)
@@ -109,12 +139,14 @@ def video_pose_estimation(data_dir, filename, index):
             image = image.half().to(device)
         start_time = time.time()  # start time for fps calculation
 
+        # print('test3')
         with torch.no_grad():  # get predictions
             # print(image)
             # print('image.shape:', image.shape)
-            print(frame_count, end=' ')
+            print(frame_count, end=' ', flush=True)
             output_data, _ = model(image)  # problem
 
+        # print('test4')
         output_data = non_max_suppression_kpt(output_data,  # Apply non-max suppression
                                             0.25,  # Conf. Threshold.
                                             0.65,  # IoU Threshold.
@@ -153,28 +185,69 @@ def video_pose_estimation(data_dir, filename, index):
     if save_demo_video:
         out.release()
 
-    human_count = max({output.shape[0] for output in outputList})
+    # select the only two skeletons: kicker's and goalkeeper's
+    title = f"YOLOv7 Pose Estimation Demo: No. {index} / {video_count}"
+    im0 = show_skeleton(image0, output_data0, names)
+    im0 = cv2.resize(im0, (960, 540))
+    cv2.imshow(title, im0)
 
-    keypoints = [[] for human_index in range(human_count)]
-    scores = [[] for human_index in range(human_count)]
+    print("Enter Kicker Index")
+    key_input = choose_skeleton_using_keys(f"{title} - Kicker: ")
+    if key_input is None:
+        return None
+    kicker_index = int(key_input)
+    print("Kicker:", kicker_index)
+
+    print("Enter Goalkeeper Index")
+    key_input = choose_skeleton_using_keys(f"{title} - Kicker: {kicker_index} - Goalkeeper: ")
+    if key_input is None:
+        return None
+    goalkeeper_index = int(key_input)
+    print("Goalkeeper:", goalkeeper_index)
+
+    """
+    im_done = show_skeleton(image0, [output_data0[kicker_index], outp], names)
+    im_done = cv2.resize(im_done, (960, 540))
+    cv2.imshow(title, im_done)
+    """
+
+    human_count = 2  # max({output.shape[0] for output in outputList})
+
+    keypoints = [[] for _ in range(human_count)]
+    scores = [[] for _ in range(human_count)]
 
     data_shape = (...,)
     for output in outputList:
         if output.shape[0]:
             data_shape = output[0].shape
             break
-    prev_data = np.zeros(data_shape)
+    zero_data = np.zeros(data_shape)[7:].T
 
-    for frame_index in range(frame_count):
-        for human_index in range(human_count):
-            data = outputList[frame_index][human_index] \
-                if len(outputList[frame_index]) > human_index \
-                else prev_data
-            prev_data = data
-            data = data[7:].T
-            keypoints[human_index].append(np.array([data[::3], data[1::3]]).T)
-            scores[human_index].append(data[2::3])
+    for result_index, needed_index_0 in enumerate([kicker_index, goalkeeper_index]):
+        prev_min_data = outputList[0][needed_index_0][7:].T
+        for frame_index in range(frame_count):
+            min_distance_square = frame_width ** 2 + frame_height ** 2 + 1000
+            min_data = zero_data
+            prev_keypoint = np.array([prev_min_data[::3], prev_min_data[1::3]]).T
+            for human_index, data in enumerate(outputList[frame_index]):
+                data = data[7:].T
+                keypoint = np.array([data[::3], data[1::3]]).T
+                distance_square = np.sum(np.power(keypoint[coco_center] - prev_keypoint[coco_center], 2))
+                if distance_square < min_distance_square:
+                    min_distance_square = distance_square
+                    min_data = data
+            if min_distance_square > (frame_width ** 2 + frame_height ** 2) / (4 ** 2):
+                # 너무 멀 경우 사람 인식을 못하는 것으로 간주하고 이전 포즈를 그대로 유지한다.
+                min_data = zero_data
+            else:
+                # 그렇지 않은 경우에만 이전 포즈가 새 포즈로 바뀐다.
+                prev_min_data = min_data
+            min_keypoint = np.array([min_data[::3], min_data[1::3]]).T
+            keypoints[result_index].append(min_keypoint)
+            min_score = min_data[2::3]
+            scores[result_index].append(min_score)
 
+    """
     # copying the first frame which was recognized
     for human_index in range(human_count):
         for frame_index in range(frame_count):
@@ -185,62 +258,7 @@ def video_pose_estimation(data_dir, filename, index):
                     keypoints[human_index][new_frame_index] = keypoint_first
                     scores[human_index][new_frame_index] = score_first
                 break
-
-    # select the only two skeletons: kicker's and goalkeeper's
-    if select_skeletons:
-        title = f"YOLOv7 Pose Estimation Demo: No. {index}"
-        im0 = show_skeleton(image0, output_data0, names)
-        im0 = cv2.resize(im0, (960, 540))
-        cv2.imshow(title, im0)
-
-        print("Enter Kicker Index")
-        key_input = ''
-        while True:
-            key = cv2.waitKey(0)
-            if key in range(ord('0'), ord('9')+1):
-                key_input += chr(key)
-                print(f"{title} - Kicker: {key_input}")
-            elif key in [10, 13]:  # Enter
-                if key_input:
-                    break
-                print("Please enter a number")
-            elif key == 8:  # Backspace
-                if key_input:
-                    key_input = key_input[:-1]
-                print(f"{title} - Kicker: {key_input}")
-            else:
-                print("Please enter a number")
-        kicker_index = int(key_input)
-        print("Kicker:", kicker_index)
-
-        print("Enter Goalkeeper Index")
-        key_input = ''
-        while True:
-            key = cv2.waitKey(0)
-            if key in range(ord('0'), ord('9')+1):
-                key_input += chr(key)
-                print(f"{title} - Kicker: {kicker_index} - Goalkeeper: {key_input}")
-            elif key in [10, 13]:  # Enter
-                if key_input:
-                    break
-                print("Please enter a number")
-            elif key == 8:  # Backspace
-                if key_input:
-                    key_input = key_input[:-1]
-                print(f"{title} - Kicker: {kicker_index} - Goalkeeper: {key_input}")
-            else:
-                print("Please enter a number")
-        goalkeeper_index = int(key_input)
-        print("Goalkeeper:", goalkeeper_index)
-
-        """
-        im_done = show_skeleton(image0, [output_data0[kicker_index], outp], names)
-        im_done = cv2.resize(im_done, (960, 540))
-        cv2.imshow(title, im_done)
-        """
-
-        keypoints = [keypoints[kicker_index], keypoints[goalkeeper_index]]
-        scores = [scores[kicker_index], scores[goalkeeper_index]]
+    """
 
     keypoints, scores = np.array(keypoints), np.array(scores)
     return filepath, keypoints, scores
@@ -252,9 +270,21 @@ try:
 except FileNotFoundError:
     data_list = []
 
-for index, filename in enumerate(os.listdir(data_dir)):
-    data_list.append(video_pose_estimation(data_dir, filename, index))
+list_dir = os.listdir(data_dir)
+video_count = len(list_dir)
+index = -2
+for filename in list_dir:
     cv2.destroyAllWindows()
+    index += 2
+    if 'train' in filename:
+        continue
+    result1 = video_pose_estimation(data_dir, filename, index, video_count)
+    if result1 is None:
+        continue
+    result2 = video_pose_estimation(data_dir, filename[:-4] + '_train.mp4', index + 1, video_count)
+    if result2 is None:
+        continue
+    data_list.append([result1, result2])
 
 with open(pickle_path, "wb") as f:
     pickle.dump(data_list, f, protocol=pickle.HIGHEST_PROTOCOL)
