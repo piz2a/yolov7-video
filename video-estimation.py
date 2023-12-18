@@ -1,5 +1,3 @@
-import threading
-
 import torch
 import cv2
 from torchvision import transforms
@@ -12,9 +10,11 @@ import pickle
 from utils.plots import output_to_keypoint, colors, plot_one_box_kpt
 
 # Configurations
-view_img = False
+view_img = True
 save_demo_video = False
-select_skeletons = True
+select_skeletons = False
+pickle_path = "../result.pickle"
+data_dir = 'data_test'
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 model = torch.load('yolov7-w6-pose.pt', map_location=device)['model']
@@ -41,19 +41,23 @@ def show_skeleton(image, output_data, names):
     # gn = torch.tensor(im0.shape)[[1, 0, 1, 0]]  # normalization gain whwh
 
     for i, pose in enumerate(output_data):  # detections per image
+        print(output_data)
         if len(output_data):  # check if no pose
+            print(f"{i}/{len(output_data)}")
             for c in pose[:, 5].unique():  # Print results
                 n = (pose[:, 5] == c).sum()  # detections per class
                 print("No of Objects in Current Frame : {}".format(n))
 
             for det_index, (*xyxy, conf, cls) in enumerate(
                     reversed(pose[:, :6])):  # loop over poses for drawing on frame
+                print(f"- {det_index} / {n}")
                 c = int(cls)  # integer class
                 kpts = pose[det_index, 6:]
                 label = f'{names[c]} No.{det_index}-{conf:.2f}'
                 plot_one_box_kpt(xyxy, im0, label=label, color=colors(c, True),
                                  line_thickness=3, kpt_label=True, kpts=kpts, steps=3,
                                  orig_shape=im0.shape[:2])
+
     return im0
 
 
@@ -182,6 +186,7 @@ def video_pose_estimation(data_dir, filename, index):
                     scores[human_index][new_frame_index] = score_first
                 break
 
+    # select the only two skeletons: kicker's and goalkeeper's
     if select_skeletons:
         title = f"YOLOv7 Pose Estimation Demo: No. {index}"
         im0 = show_skeleton(image0, output_data0, names)
@@ -228,15 +233,18 @@ def video_pose_estimation(data_dir, filename, index):
         goalkeeper_index = int(key_input)
         print("Goalkeeper:", goalkeeper_index)
 
+        """
+        im_done = show_skeleton(image0, [output_data0[kicker_index], outp], names)
+        im_done = cv2.resize(im_done, (960, 540))
+        cv2.imshow(title, im_done)
+        """
+
         keypoints = [keypoints[kicker_index], keypoints[goalkeeper_index]]
         scores = [scores[kicker_index], scores[goalkeeper_index]]
 
     keypoints, scores = np.array(keypoints), np.array(scores)
     return filepath, keypoints, scores
 
-
-pickle_path = "../result.pickle"
-data_dir = 'data_test'
 
 try:
     with open(pickle_path, "rb") as f:
@@ -251,5 +259,3 @@ for index, filename in enumerate(os.listdir(data_dir)):
 with open(pickle_path, "wb") as f:
     pickle.dump(data_list, f, protocol=pickle.HIGHEST_PROTOCOL)
 print("Saving Complete")
-
-#%%
