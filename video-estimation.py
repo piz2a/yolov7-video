@@ -15,7 +15,7 @@ save_demo_video = False
 # select_skeletons = False
 coco_center = 1
 pickle_path = "../result.pickle"
-data_dir = 'data_test'
+data_dir = 'data1080p'
 
 device = torch.device("cuda:0" if torch.cuda.is_available() else "cpu")
 model = torch.load('yolov7-w6-pose.pt', map_location=device)['model']
@@ -96,7 +96,8 @@ def video_pose_estimation(data_dir, filename, index, video_count):
     cap = cv2.VideoCapture(filepath)
 
     if not cap.isOpened():
-        raise TypeError("Error opening video stream or file")
+        print("Error opening video stream or file")
+        return None
 
     frame_width = int(cap.get(3))
     frame_height = int(cap.get(4))
@@ -228,6 +229,8 @@ def video_pose_estimation(data_dir, filename, index, video_count):
     # 이전 프레임의 skeleton과 거리가 가장 가까운 skeleton을 찾고 이 두 skeleton이 같은 사람이라고 가정
     for result_index, needed_index_0 in enumerate([kicker_index, goalkeeper_index]):
         # print("needed_index_0:", needed_index_0)
+        if needed_index_0 >= len(outputList[0]):
+            return None
         prev_min_data = outputList[0][needed_index_0][7:].T
         for frame_index in range(frame_count):
             min_distance_square = frame_width ** 2 + frame_height ** 2 + 1000
@@ -291,6 +294,8 @@ for filename in list_dir:
     if result2 is None:
         continue
     data_list.append([result1, result2])
+    with open(pickle_path, "wb") as f:
+        pickle.dump(data_list, f, protocol=pickle.HIGHEST_PROTOCOL)
 
 with open(pickle_path, "wb") as f:
     pickle.dump(data_list, f, protocol=pickle.HIGHEST_PROTOCOL)
