@@ -240,7 +240,7 @@ def video_pose_estimation(data_dir, filename, index, video_count):
                 if distance_square < min_distance_square:
                     min_distance_square = distance_square
                     min_data = data
-            if min_distance_square > (frame_width ** 2 + frame_height ** 2) / (4 ** 2):
+            if min_distance_square > (frame_width ** 2 + frame_height ** 2) / (10 ** 2):
                 # 너무 멀 경우 사람 인식을 못하는 것으로 간주하고 이전 포즈를 그대로 유지한다.
                 min_data = zero_data
             else:
