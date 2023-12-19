@@ -271,6 +271,8 @@ def video_pose_estimation(data_dir, filename, index, video_count):
 try:
     with open(pickle_path, "rb") as f:
         data_list = pickle.load(f)
+    if input("Overwrite previous result pickle file? [y/N]") in ['Y', 'y']:
+        data_list = []
 except FileNotFoundError:
     data_list = []
 
