@@ -50,7 +50,7 @@ def show_skeleton(image, output_data, names):
                 print("No of Objects in Current Frame : {}".format(n))
 
             for det_index, (*xyxy, conf, cls) in enumerate(
-                    reversed(pose[:, :6])):  # loop over poses for drawing on frame
+                    (pose[:, :6])):  # loop over poses for drawing on frame
                 # print(f"- {det_index} / {n}")
                 c = int(cls)  # integer class
                 kpts = pose[det_index, 6:]
@@ -156,9 +156,11 @@ def video_pose_estimation(data_dir, filename, index, video_count):
         if isFirst:
             image0 = image
             output_data0 = output_data
+            # print('output_data0.shape:', output_data0.shape)
             isFirst = False
 
         output = output_to_keypoint(output_data)
+        # print('output.shape:', output.shape)
         outputList.append(output)
 
         if view_img or save_demo_video:
@@ -223,7 +225,9 @@ def video_pose_estimation(data_dir, filename, index, video_count):
             break
     zero_data = np.zeros(data_shape)[7:].T
 
+    # 이전 프레임의 skeleton과 거리가 가장 가까운 skeleton을 찾고 이 두 skeleton이 같은 사람이라고 가정
     for result_index, needed_index_0 in enumerate([kicker_index, goalkeeper_index]):
+        # print("needed_index_0:", needed_index_0)
         prev_min_data = outputList[0][needed_index_0][7:].T
         for frame_index in range(frame_count):
             min_distance_square = frame_width ** 2 + frame_height ** 2 + 1000
